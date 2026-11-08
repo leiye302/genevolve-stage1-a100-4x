@@ -1,0 +1,39 @@
+{
+  "paper": "https://arxiv.org/html/2605.21605v2",
+  "agent": {
+    "url": "https://github.com/MeiGen-AI/GenEvolve.git",
+    "revision": "23c847c559ccc0f95bbf4b3d8925898463822f4c"
+  },
+  "trainer": {
+    "url": "https://github.com/hiyouga/LLaMA-Factory.git",
+    "revision": "7af909522a951e3ad9f022ea6f88b6755257eaa5"
+  },
+  "model": {
+    "id": "Qwen/Qwen3-VL-8B-Instruct",
+    "revision": "0c351dd01ed87e9c1b53cbc748cba10e6187ff3b"
+  },
+  "dataset": {
+    "id": "MeiGen-AI/GenEvolve-Data-Bench",
+    "revision": "9f291879d5dfe1195f47883e23069d3f6e829afe",
+    "train_rows": 8800,
+    "eval_rows": 200,
+    "prompt_rows": 2575,
+    "train_sha256": "bd32a11d46a4bb46e6170d53bf9622a985ff936f4e1d170f86253d8eeb10a548",
+    "eval_git_blob": "6c07d260cfda843b349a4b1a7ccf71b3954a0485",
+    "prompt_git_blob": "ca78d998179da618ef3a1639b09d9da7ae20663b"
+  },
+  "rollout": {
+    "count": 5000,
+    "seed": 2026,
+    "temperature": 0.7,
+    "top_p": 0.95,
+    "top_k": -1,
+    "max_rounds": 11,
+    "max_initial_prompt_tokens": 6144,
+    "max_generated_tokens": 30000,
+    "max_tokens_per_round": 4096,
+    "max_model_len": 65536,
+    "max_reference_images": 2,
+    "max_search_results": 5
+  }
+}
