@@ -10,12 +10,12 @@ import unittest
 from zipfile import ZipFile
 
 from ge_repro.checkpoint import attest, final_checkpoint, inspect_checkpoint
-from ge_repro.common import SFT_FINAL_UPDATE, atomic_json, file_sha, relative_file, source_lock
+from ge_repro.common import ROOT, SFT_FINAL_UPDATE, atomic_json, file_sha, read_json, relative_file, source_lock
 from ge_repro.data import read_prompts, sft_registry
 from ge_repro.rollout import collect_slots, make_slots, run_slot
 from ge_repro.serve import command
 from ge_repro.tools import InfrastructureError
-from ge_repro.train import config
+from ge_repro.train import config, training_command
 
 
 class ImageIds:
@@ -63,16 +63,33 @@ def fixture_checkpoint(work, step=550):
 class ContractTests(unittest.TestCase):
     def test_exact_paper_sft_and_four_cards(self):
         args = config(Path("scratch"))
+        self.assertEqual((args["per_device_train_batch_size"], args["gradient_accumulation_steps"]), (2, 4))
         self.assertEqual(args["gradient_accumulation_steps"] * args["per_device_train_batch_size"] * 4, 32)
         self.assertEqual(8800 // 32 * args["num_train_epochs"], SFT_FINAL_UPDATE)
         self.assertEqual((args["cutoff_len"], args["learning_rate"], args["warmup_ratio"]), (32768, 1e-5, .02))
         self.assertEqual(args["finetuning_type"], "full")
         self.assertTrue(args["freeze_vision_tower"] and args["freeze_multi_modal_projector"])
         self.assertFalse(args["train_on_prompt"] or args["mask_history"] or args["save_only_model"])
+        self.assertNotIn("average_tokens_across_devices", args)
         self.assertEqual(sft_registry()["genevolve_eval"]["file_name"], "eval.jsonl")
         serve = command(Path("scratch/checkpoint-550"), "fixture", 18080, 65536)
         self.assertEqual(serve[serve.index("--data-parallel-size") + 1], "4")
         self.assertEqual(serve[serve.index("--host") + 1], "127.0.0.1")
+
+    def test_stock_trainer_and_zero3_without_offload(self):
+        zero3 = read_json(ROOT / "configs/zero3.json")
+        self.assertEqual(zero3["zero_optimization"]["stage"], 3)
+        self.assertNotIn("optimizer", zero3)
+        self.assertNotIn("offload_optimizer", zero3["zero_optimization"])
+        self.assertNotIn("offload_param", zero3["zero_optimization"])
+        upstream = ROOT / ".deps/llamafactory/examples/deepspeed/ds_z3_config.json"
+        if upstream.is_file():
+            self.assertEqual(zero3, read_json(upstream))
+        launch = training_command(Path("sft-launch.yaml"))
+        self.assertEqual(launch[launch.index("--module") + 1], "llamafactory.launcher")
+        self.assertIn("--nproc-per-node=4", launch)
+        with self.assertRaises(ValueError):
+            training_command(Path("sft-launch.json"))
 
     def test_exact_5000_slots_no_holdout_or_ground_truth(self):
         pool = [{"source_id": str(i), "prompt": "Question " + str(i)} for i in range(2575)]

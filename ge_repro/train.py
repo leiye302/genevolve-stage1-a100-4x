@@ -1,6 +1,4 @@
 import os
-from pathlib import Path
-import re
 import shutil
 import subprocess
 import sys
@@ -13,6 +11,8 @@ from .common import (
     exact_json, file_sha, job_lock, read_json, source_lock, verify_checkout,
 )
 from .data import SFT_DIR, verify_prepared
+
+TRAINER_ENTRY = "llamafactory.launcher"
 
 
 def config(work, resume=None):
@@ -31,6 +31,15 @@ def config(work, resume=None):
     if resume is not None:
         args["resume_from_checkpoint"] = str(resume)
     return args
+
+
+def training_command(args_file):
+    # JSON is valid YAML; the pinned launcher loads this through its YAML path.
+    if args_file.suffix != ".yaml":
+        raise ValueError("Use a .yaml config for the pinned LLaMA-Factory launcher")
+    return [sys.executable, "-m", "torch.distributed.run", "--standalone",
+            "--nnodes=1", f"--nproc-per-node={WORLD_SIZE}", "--module", TRAINER_ENTRY,
+            str(args_file)]
 
 
 def check_gpus():
@@ -52,19 +61,14 @@ for i in range(4):
 def check_storage(work, resume_step):
     if shutil.disk_usage(work).free < (300 if resume_step == 0 else 150) * 2**30:
         raise RuntimeError("Not enough work-volume space for complete ZeRO-3 checkpoints")
-    host = re.search(r"^MemAvailable:\s+(\d+)\s+kB", Path("/proc/meminfo").read_text(), re.M)
-    available = int(host[1]) * 1024 if host else 0
-    cap = Path("/sys/fs/cgroup/memory.max")
-    used = Path("/sys/fs/cgroup/memory.current")
-    if cap.is_file() and used.is_file() and cap.read_text().strip() != "max":
-        available = min(available, int(cap.read_text()) - int(used.read_text()))
-    if available < 160 * 2**30:
-        raise RuntimeError("CPU AdamW offload needs at least 160 GiB available system RAM")
 
 
 def run_training(work, *, resume):
     with job_lock(work, "gpu"):
-        verify_checkout("trainer")
+        upstream = verify_checkout("trainer")
+        zero3 = read_json(ROOT / "configs/zero3.json")
+        if zero3 != read_json(upstream / "examples/deepspeed/ds_z3_config.json"):
+            raise ValueError("Use the pinned upstream ZeRO-3 recipe without offload")
         prepared = verify_prepared(work)
         scientific = {
             "sources": source_lock(),
@@ -73,9 +77,9 @@ def run_training(work, *, resume):
             "final_update": SFT_FINAL_UPDATE,
             "dataset_receipt_sha256": digest(prepared),
             "sft_config": read_json(ROOT / "configs/sft.json"),
-            "deepspeed_config": read_json(ROOT / "configs/zero3.json"),
+            "deepspeed_config": zero3,
             "launcher_sha256": file_sha(__file__),
-            "token_loss_entry_sha256": file_sha(Path(__file__).with_name("train_entry.py")),
+            "trainer_entry": TRAINER_ENTRY,
         }
         exact_json(work / "run_contract.json", scientific)
         out = work / "checkpoints"
@@ -111,13 +115,10 @@ def run_training(work, *, resume):
         sample = check_sample(work / "base", sft / "train.jsonl", sft)
         atomic_json(work / "sft_preflight.json", sample)
         print("Native multimodal SFT preflight:", sample, flush=True)
-        args_file = work / ("sft-resume.json" if start else "sft-launch.json")
+        args_file = work / ("sft-resume.yaml" if start else "sft-launch.yaml")
         atomic_json(args_file, config(work, start))
         env = dict(os.environ)
         env.pop("MASTER_PORT", None)
-        # Use this environment's torchrun, including on the distributed ranks.
-        subprocess.run([sys.executable, "-m", "torch.distributed.run", "--standalone",
-                        "--nnodes=1", "--nproc-per-node=4", "--module", "ge_repro.train_entry",
-                        str(args_file)], check=True, env=env, cwd=ROOT)
+        subprocess.run(training_command(args_file), check=True, env=env, cwd=ROOT)
         attest(work, SFT_EPOCH_UPDATES, scientific)
         return attest(work, SFT_FINAL_UPDATE, scientific)

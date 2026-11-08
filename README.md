@@ -13,17 +13,17 @@ The [paper's Table 9](https://arxiv.org/html/2605.21605v2#A3.T9) and [official d
 | Objective | Full language-policy SFT. Freeze vision tower and multimodal projector. Mask system, user, tool observations and image tokens. Supervise all assistant turns, including explicit reasoning, tool calls and final JSON. |
 | Context | 32,768 cutoff; no packing or completion-only data conversion; unchanged multimodal trajectories |
 | Optimizer | AdamW, LR 1e-5, decay 1e-6, cosine, 2% warmup |
-| Hardware adaptation | 4 GPUs × microbatch 1 × accumulation 8 = global 32; paper: 16 × 2 × 1 |
-| Runtime | BF16, FA2, activation checkpointing, DeepSpeed ZeRO-3; CPU optimizer offload for 4 GPUs |
+| Hardware adaptation | 4 GPUs × microbatch 2 × accumulation 4 = global 32; paper: 16 × 2 × 1 |
+| Runtime | BF16, FA2, activation checkpointing, stock LLaMA-Factory ZeRO-3 with no CPU/NVMe offload |
 | Schedule | 2 epochs × 275 optimizer updates = 550; held-out SFT loss and full checkpoint after each epoch |
 
-The assistant-token objective is $\mathcal{L}=-\sum_{i,t}m_{i,t}\log p_\theta(y_{i,t}\mid h_{i,t})/\sum_{i,t}m_{i,t}$. The LLaMA-Factory template named **qwen3_vl_nothink** uses the Instruct chat framing; it does **not** delete explicit assistant reasoning from the data. The released SFT rows already use user-role tool observations containing their native wrapper and image placeholders. We do not relabel these as assistant messages, regenerate the teachers, or train on GT images.
+The paper writes its assistant-token objective as $\mathcal{L}=-\sum_{i,t}m_{i,t}\log p_\theta(y_{i,t}\mid h_{i,t})/\sum_{i,t}m_{i,t}$. The LLaMA-Factory template named **qwen3_vl_nothink** uses the Instruct chat framing; it does **not** delete explicit assistant reasoning from the data. The released SFT rows already use user-role tool observations containing their native wrapper and image placeholders. We do not relabel these as assistant messages, regenerate the teachers, or train on GT images.
 
-The exact package revisions, seed and image pixel bounds were not all specified by the authors. We use pinned public packages, seed 42 and the pinned trainer's default image bounds (1,024 to 589,824 pixels). The pinned Qwen3-VL forward loss does not consume the accumulated token count. A thin Trainer hook uses the same causal cross-entropy with the count of valid labels across all four ranks and eight accumulation microsteps, implementing the paper's token mean rather than an average of per-microbatch means. The world-size/accumulation and offload changes preserve the effective batch and task, not a promise of bit-for-bit numerical identity to the 16-GPU run.
+The exact package revisions, seed and image pixel bounds were not all specified by the authors. We use pinned public packages, seed 42 and the pinned trainer's default image bounds (1,024 to 589,824 pixels). The training entry uses the pinned LLaMA-Factory trainer and its normal causal loss, with no custom loss, reduction hook or optimizer override. The ZeRO-3 config matches the pinned upstream example. We preserve the per-device microbatch and increase only accumulation to preserve the effective batch on four cards. This does not imply bit-for-bit identity to the authors' 16-GPU run.
 
 ## Setup and run
 
-Requirements: Linux x86-64, Python 3.11, **four allocated A100 80 GB cards**, CUDA 12.8 toolkit and a compatible NVIDIA driver, GCC/G++, git, and outbound access to GitHub/Hugging Face. CPU optimizer offload needs **at least 160 GiB available RAM** (recommend a 192–256 GiB allocation); use a local SSD/NVMe volume with **400 GiB free before preparation**. The two complete ZeRO-3 checkpoints include FP32 optimizer states and are much larger than model-only exports. Do not put checkpoints in a Git repository. Full setup fetches about 7.4 GB of SFT data plus the base weights, and separately installs the training and serving environments.
+Requirements: Linux x86-64, Python 3.11, **four allocated A100 80 GB cards**, CUDA 12.8 toolkit and a compatible NVIDIA driver, GCC/G++, git, and outbound access to GitHub/Hugging Face. Use a local SSD/NVMe volume with **400 GiB free before preparation**. The two complete ZeRO-3 checkpoints include FP32 optimizer states and are much larger than model-only exports. Do not put checkpoints in a Git repository. Full setup fetches about 7.4 GB of SFT data plus the base weights, and separately installs the training and serving environments.
 
 ~~~bash
 git clone https://github.com/leiye302/genevolve-stage1-a100-4x.git
